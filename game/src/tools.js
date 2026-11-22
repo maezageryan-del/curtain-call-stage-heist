@@ -1,75 +1,79 @@
-// CURTAIN CALL — the thief's tools, each at a cost: a rose to lure a guard,
-// stage smoke to vanish, and cutting the footlights to make shadow.
-window.CURTAIN_TOOLS = (function () {
-  const CFG = window.CURTAIN_CONFIG;
+// The thief's tools — each one costs something. One job: rose, smoke and
+// footlights, their stocks and their effects.
 
-  function makeTools() {
-    return {
-      rose: CFG.tools.rose,
-      smoke: CFG.tools.smoke,
-      footlights: CFG.tools.footlights,
-      roses: [], // {x, y, tx, ty, t}
-      smokeTimer: 0,
-      smokeX: 0, smokeY: 0,
-      shadowZones: [], // {x, y, r, t}
-    };
+export class Tools {
+  constructor() {
+    this.rose = 3; // lures the nearest guard to the landing spot
+    this.smoke = 2; // stage smoke hides you for ~4 seconds
+    this.lights = 2; // cut the footlights: shadow, but +alarm
+    this.roses = []; // roses in flight: {x, y, tx, ty, t}
+    this.smokeClouds = []; // {x, y, r, life}
+    this.shadowZones = []; // {x, y, w, h, life}
   }
 
-  function nearestGuard(guards, x, y) {
-    let best = null, bestD = 1e9;
-    for (const g of guards) {
-      const d = Math.hypot(g.x - x, g.y - y);
-      if (d < bestD) { bestD = d; best = g; }
-    }
-    return best;
+  reset() {
+    this.rose = 3;
+    this.smoke = 2;
+    this.lights = 2;
+    this.roses = [];
+    this.smokeClouds = [];
+    this.shadowZones = [];
   }
 
-  function tossRose(tools, guards, tx, ty, audio) {
-    if (tools.rose <= 0) return false;
-    tools.rose -= 1;
-    tools.roses.push({ x: tx, y: ty, t: 0, landed: true });
-    const g = nearestGuard(guards, tx, ty);
-    if (g) window.CURTAIN_GUARDS.lureGuard(g, tx, ty);
-    if (audio) audio.roseToss();
+  // Toss a rose toward (tx, ty). On landing, the nearest guard walks over.
+  tossRose(fromX, fromY, tx, ty, guards, audio) {
+    if (this.rose <= 0) return false;
+    this.rose -= 1;
+    this.roses.push({ x: fromX, y: fromY, tx, ty, t: 0, dur: 0.45 });
+    audio.rose();
+    this._pendingLure = { tx, ty, guards };
     return true;
   }
 
-  function puffSmoke(tools, player, audio) {
-    if (tools.smoke <= 0) return false;
-    tools.smoke -= 1;
-    tools.smokeTimer = CFG.smokeSeconds;
-    tools.smokeX = player.x; tools.smokeY = player.y;
-    player.hidden = true;
-    if (audio) audio.smokePuff();
+  // Puff of stage smoke at the thief's feet.
+  puffSmoke(x, y, audio) {
+    if (this.smoke <= 0) return false;
+    this.smoke -= 1;
+    this.smokeClouds.push({ x, y, r: 70, life: 4 });
+    audio.smoke();
     return true;
   }
 
-  function cutFootlights(tools, player, game, audio) {
-    if (tools.footlights <= 0) return false;
-    tools.footlights -= 1;
-    tools.shadowZones.push({ x: player.x, y: player.y, r: 130, t: CFG.shadowSeconds });
-    game.alarm = Math.min(100, game.alarm + CFG.footlightAlarmCost);
-    if (audio) audio.footlightCut();
+  // Cut the footlights: a wide shadow zone across the stage floor,
+  // but the house notices the lights go out.
+  cutFootlights(audio) {
+    if (this.lights <= 0) return false;
+    this.lights -= 1;
+    this.shadowZones.push({ x: 180, y: 540, w: 920, h: 120, life: 12 });
+    audio.lights();
     return true;
   }
 
-  function updateTools(tools, dt, player) {
-    if (tools.smokeTimer > 0) {
-      tools.smokeTimer -= dt;
-      if (tools.smokeTimer <= 0) player.hidden = false;
+  update(dt) {
+    for (const r of this.roses) {
+      r.t += dt;
+      const k = Math.min(1, r.t / r.dur);
+      r.x = r.x + (r.tx - r.x) * k * 0.6;
+      r.y = r.y + (r.ty - r.y) * k * 0.6;
+      if (k >= 1 && !r.landed) {
+        r.landed = true;
+        // The nearest guard goes to look at the rose.
+        if (this._pendingLure) {
+          let best = null;
+          let bestD = Infinity;
+          for (const g of this._pendingLure.guards) {
+            const d = Math.hypot(g.x - r.tx, g.y - r.ty);
+            if (d < bestD) { bestD = d; best = g; }
+          }
+          if (best) best.lureTo(r.tx, r.ty);
+          this._pendingLure = null;
+        }
+      }
     }
-    for (const z of tools.shadowZones) z.t -= dt;
-    tools.shadowZones = tools.shadowZones.filter((z) => z.t > 0);
-    for (const r of tools.roses) r.t += dt;
-    tools.roses = tools.roses.filter((r) => r.t < 6);
-    // Standing in a cut-footlight shadow hides the thief from cones.
-    let inShadow = false;
-    for (const z of tools.shadowZones) {
-      if (Math.hypot(player.x - z.x, player.y - z.y) < z.r) inShadow = true;
-    }
-    if (inShadow) player.hidden = true;
-    else if (tools.smokeTimer <= 0) player.hidden = false;
+    this.roses = this.roses.filter((r) => !r.landed || r.t < r.dur + 1.2);
+    for (const c of this.smokeClouds) c.life -= dt;
+    this.smokeClouds = this.smokeClouds.filter((c) => c.life > 0);
+    for (const z of this.shadowZones) z.life -= dt;
+    this.shadowZones = this.shadowZones.filter((z) => z.life > 0);
   }
-
-  return { makeTools, tossRose, puffSmoke, cutFootlights, updateTools };
-})();
+}

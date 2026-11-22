@@ -1,72 +1,122 @@
-// CURTAIN CALL — deterministic screenshot staging. Each shot sets up a real,
-// reachable gameplay state through the game's own state (act, positions,
-// suspicion, alarm, loot) and then freezes entity updates so the frame is
-// stable; the render loop keeps drawing the live scene.
-window.CURTAIN_SHOTS = (function () {
-  const GAME = window.CURTAIN_GAME;
+// Deterministic screenshot staging. One job: put the real game into the
+// exact state each screenshot shows, then freeze it so the frame is stable.
+//
+//   ?shot=cover      — the stage mid-sweep, all five required elements
+//   ?shot=auditorium — the thief between the seat rows
+//   ?shot=nearmiss   — a cone about to cross the thief, rose in flight
+//   ?shot=getaway    — the stage door with the diamond, alarm high
 
-  function placeGuard(game, i, x, y, angle, suspicion) {
-    const g = game.guards[i];
-    if (!g) return;
-    g.x = x; g.y = y; g.angle = angle; g.suspicion = suspicion;
-    g.state = 'patrol'; g.pauseTimer = 99;
+export function applyShot(game, name) {
+  const g = game;
+  if (name === 'cover') {
+    g.loadAct(2);
+    g.player.x = 560;
+    g.player.y = 520;
+    g.player.dirX = 0;
+    g.player.dirY = -1;
+    // Followspot mid-sweep across the stage.
+    g.followspot.t = 1.1;
+    g.followspot.angle = Math.PI / 2 + 0.55;
+    // Two ushers' cones crossing the boards, stage manager below.
+    g.guards[1].x = 200;
+    g.guards[1].y = 380;
+    g.guards[1].angle = 0.35;
+    g.guards[1].pauseTimer = 99;
+    g.guards[2].x = 1080;
+    g.guards[2].y = 380;
+    g.guards[2].angle = Math.PI - 0.35;
+    g.guards[2].pauseTimer = 99;
+    g.guards[0].x = 640;
+    g.guards[0].y = 600;
+    g.guards[0].angle = -Math.PI / 2;
+    g.guards[0].pauseTimer = 99;
+    g.cameras[0].angle = 0.6;
+    g.cameras[1].angle = Math.PI - 0.6;
+    g.alarm = 35;
+    g.alarmPeak = 35;
+    g.suspicion = 20;
+    g.lootCount = 2;
+    g.tools.rose = 2;
+    g.tools.smoke = 1;
+    g.tools.lights = 1;
+    g.tools.shadowZones.push({ x: 480, y: 470, w: 220, h: 110, life: 999 });
+    g.player.hidden = true;
+  } else if (name === 'auditorium') {
+    g.loadAct(0);
+    g.player.x = 640;
+    g.player.y = 470;
+    g.player.dirX = 0;
+    g.player.dirY = -1;
+    g.guards[0].x = 640;
+    g.guards[0].y = 250;
+    g.guards[0].angle = Math.PI / 2;
+    g.guards[0].pauseTimer = 99;
+    g.guards[1].x = 420;
+    g.guards[1].y = 600;
+    g.guards[1].angle = 0;
+    g.guards[1].pauseTimer = 99;
+    g.cameras[0].angle = 0.9;
+    g.alarm = 12;
+    g.suspicion = 34;
+    g.lootCount = 1;
+  } else if (name === 'nearmiss') {
+    g.loadAct(1);
+    g.player.x = 330;
+    g.player.y = 300;
+    g.player.dirX = 1;
+    g.player.dirY = 0;
+    // A stagehand's lantern cone about to cross the thief, who is tucked
+    // behind the costume rail.
+    g.guards[0].x = 400;
+    g.guards[0].y = 180;
+    g.guards[0].angle = Math.PI / 2;
+    g.guards[0].pauseTimer = 99;
+    g.guards[1].x = 900;
+    g.guards[1].y = 420;
+    g.guards[1].angle = -Math.PI / 2;
+    g.guards[1].pauseTimer = 99;
+    g.cameras[0].angle = -0.4;
+    g.alarm = 48;
+    g.suspicion = 82;
+    g.lootCount = 1;
+    g.tools.rose = 2;
+    // A rose in flight toward the far rail.
+    g.tools.roses.push({ x: 330, y: 300, tx: 700, ty: 260, t: 0.2, dur: 0.45 });
+  } else if (name === 'getaway') {
+    g.loadAct(2);
+    // Diamond in hand, thief at the stage door, alarm high.
+    const diamond = g.level.loot.find((l) => l.diamond);
+    if (diamond) diamond.taken = true;
+    g.diamond = true;
+    g.lootCount = 3;
+    g.refreshExit();
+    g.player.x = 1200;
+    g.player.y = 375;
+    g.player.dirX = 1;
+    g.player.dirY = 0;
+    g.followspot.t = 2.4;
+    g.followspot.angle = Math.PI / 2 - 0.6;
+    g.guards[0].x = 500;
+    g.guards[0].y = 600;
+    g.guards[0].angle = 0;
+    g.guards[0].pauseTimer = 99;
+    g.guards[1].x = 200;
+    g.guards[1].y = 420;
+    g.guards[1].angle = 0.5;
+    g.guards[1].pauseTimer = 99;
+    g.guards[2].x = 1080;
+    g.guards[2].y = 420;
+    g.guards[2].angle = Math.PI - 0.5;
+    g.guards[2].pauseTimer = 99;
+    g.alarm = 78;
+    g.alarmPeak = 78;
+    g.suspicion = 55;
+    g.tools.rose = 1;
+    g.tools.smoke = 0;
+    g.tools.lights = 0;
+  } else {
+    return false;
   }
-
-  function applyShot(game, name) {
-    game.shotFrozen = true;
-    if (name === 'cover') {
-      GAME.loadAct(game, 2);
-      game.shotFrozen = true;
-      game.player.x = 470; game.player.y = 560;
-      game.player.sneaking = true;
-      game.alarm = 35;
-      game.tools.rose = 3; game.tools.smoke = 2; game.tools.footlights = 2;
-      placeGuard(game, 0, 880, 300, Math.PI * 0.85, 42);
-      if (game.cameras[0]) { game.cameras[0].angle = 0.9; game.cameras[0].suspicion = 18; }
-      if (game.cameras[1]) { game.cameras[1].angle = 2.2; game.cameras[1].suspicion = 0; }
-      if (game.followspot) { game.followspot.angle = -1.1; game.followspot.suspicion = 0; }
-    } else if (name === 'auditorium') {
-      GAME.loadAct(game, 0);
-      game.shotFrozen = true;
-      game.player.x = 640; game.player.y = 430;
-      game.player.sneaking = true;
-      game.alarm = 22;
-      game.lootCount = 1;
-      if (game.loot[0]) game.loot[0].taken = true;
-      placeGuard(game, 0, 640, 300, Math.PI / 2, 30);
-      placeGuard(game, 1, 72, 520, -Math.PI / 2, 0);
-      placeGuard(game, 2, 1208, 240, Math.PI / 2, 12);
-      if (game.cameras[0]) { game.cameras[0].angle = 1.1; game.cameras[0].suspicion = 0; }
-      game.player.noiseRings.push({ x: 640, y: 430, r: 30, max: 52, alpha: 0.4 });
-    } else if (name === 'nearmiss') {
-      GAME.loadAct(game, 1);
-      game.shotFrozen = true;
-      game.player.x = 700; game.player.y = 400;
-      game.player.sneaking = true;
-      game.alarm = 68;
-      game.lootCount = 1;
-      if (game.loot[0]) game.loot[0].taken = true;
-      placeGuard(game, 0, 560, 400, 0, 82);
-      placeGuard(game, 1, 480, 560, -Math.PI / 2, 24);
-      game.tools.roses.push({ x: 860, y: 400, t: 0.5, landed: true });
-      if (game.cameras[0]) { game.cameras[0].angle = 0.8; game.cameras[0].suspicion = 30; }
-      game.tools.shadowZones.push({ x: 700, y: 400, r: 110, t: 6 });
-    } else if (name === 'getaway') {
-      GAME.loadAct(game, 2);
-      game.shotFrozen = true;
-      game.player.x = 1195; game.player.y = 445;
-      game.alarm = 84;
-      game.lootCount = 3;
-      game.hasDiamond = true;
-      for (const item of game.loot) item.taken = true;
-      placeGuard(game, 0, 900, 300, Math.PI, 88);
-      if (game.cameras[0]) { game.cameras[0].angle = 1.2; game.cameras[0].suspicion = 64; }
-      if (game.cameras[1]) { game.cameras[1].angle = 2.0; game.cameras[1].suspicion = 40; }
-      if (game.followspot) { game.followspot.angle = -0.6; game.followspot.suspicion = 55; }
-      game.spottedTimer = 0;
-    }
-    game.state = 'playing';
-  }
-
-  return { applyShot };
-})();
+  g.frozen = true;
+  return true;
+}

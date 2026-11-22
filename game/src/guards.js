@@ -1,120 +1,128 @@
-// CURTAIN CALL — guards: patrol waypoints, raycast-blocked vision cones,
-// suspicion that rises in a cone, decays when hidden, and a fair SPOTTED warning.
-window.CURTAIN_GUARDS = (function () {
-  const CFG = window.CURTAIN_CONFIG;
+// Guards: patrol, vision cones, suspicion. One job: the people who can
+// catch you, and how they see.
 
-  function rectsOverlap(ax, ay, aw, ah, b) {
-    return ax < b.x + b.w && ax + aw > b.x && ay < b.y + b.h && ay + ah > b.y;
+import { angleDiff, clamp, dist, hasLineOfSight } from './config.js';
+
+export class Guard {
+  constructor(def) {
+    this.kind = def.kind;
+    this.name = def.name;
+    this.waypoints = def.waypoints;
+    this.speed = def.speed;
+    this.range = def.range;
+    this.halfAngle = def.halfAngle;
+    this.color = def.color;
+    this.light = def.light;
+    this.x = def.waypoints[0][0];
+    this.y = def.waypoints[0][1];
+    this.wp = 1;
+    this.angle = Math.PI / 2; // facing down the boards by default
+    this.pauseTimer = 0; // seconds standing still, scanning
+    this.state = 'patrol'; // patrol | investigate | search
+    this.target = null; // {x, y} being investigated
+    this.stateTimer = 0;
+    this.sawTimer = 0; // how long the player has been in this cone
   }
-  function pointInRect(x, y, r) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
 
-  // Line of sight: sample along the segment; blocked if a sample lands in a solid rect.
-  function hasLineOfSight(x1, y1, x2, y2, solids) {
-    const dx = x2 - x1, dy = y2 - y1;
-    const dist = Math.hypot(dx, dy);
-    const steps = Math.max(1, Math.ceil(dist / 6));
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const px = x1 + dx * t, py = y1 + dy * t;
-      for (const r of solids) if (pointInRect(px, py, r)) return false;
+  // Walk the patrol route, pausing at each waypoint to scan the room.
+  update(dt, player, covers) {
+    if (this.pauseTimer > 0) {
+      this.pauseTimer -= dt;
+      // Slow scan while paused: sweep the torch across the room.
+      this.angle += Math.sin(performance.now() / 900 + this.x) * 0.15 * dt;
+      return;
     }
+    if (this.state === 'investigate' && this.target) {
+      const d = dist(this.x, this.y, this.target.x, this.target.y);
+      if (d > 12) {
+        const a = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+        this.angle = a;
+        this.x += Math.cos(a) * this.speed * 1.15 * dt;
+        this.y += Math.sin(a) * this.speed * 1.15 * dt;
+      } else {
+        this.state = 'search';
+        this.stateTimer = 3;
+        this.pauseTimer = 3;
+      }
+      return;
+    }
+    if (this.state === 'search') {
+      this.stateTimer -= dt;
+      if (this.stateTimer <= 0) {
+        this.state = 'patrol';
+        this.target = null;
+      }
+      return;
+    }
+    // Patrol: head for the next waypoint.
+    const [tx, ty] = this.waypoints[this.wp];
+    const d = dist(this.x, this.y, tx, ty);
+    if (d < 8) {
+      this.wp = (this.wp + 1) % this.waypoints.length;
+      this.pauseTimer = 1.6; // stop and look around at each end
+      return;
+    }
+    const a = Math.atan2(ty - this.y, tx - this.x);
+    this.angle = a;
+    this.x += Math.cos(a) * this.speed * dt;
+    this.y += Math.sin(a) * this.speed * dt;
+  }
+
+  // Is the player inside this guard's vision cone right now?
+  sees(player, covers, sneak) {
+    const d = dist(this.x, this.y, player.x, player.y);
+    const range = sneak ? this.range * 0.7 : this.range;
+    if (d > range) return false;
+    const a = Math.atan2(player.y - this.y, player.x - this.x);
+    if (Math.abs(angleDiff(this.angle, a)) > this.halfAngle) return false;
+    if (!hasLineOfSight(this.x, this.y, player.x, player.y, covers)) return false;
     return true;
   }
 
-  function angleDiff(a, b) {
-    let d = a - b;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    return d;
+  // Called when a rose lands: walk over and have a look.
+  lureTo(x, y) {
+    this.state = 'investigate';
+    this.target = { x, y };
+    this.pauseTimer = 0;
+  }
+}
+
+// The followspot: a giant sweeping cone from the lighting rig. It is a
+// rhythm hazard — the whole stage breathes with it.
+export class Followspot {
+  constructor(def) {
+    this.x = def.x;
+    this.y = def.y;
+    this.range = def.range;
+    this.halfAngle = def.halfAngle;
+    this.speed = def.speed;
+    this.amp = def.amp;
+    this.t = 0;
+    this.angle = Math.PI / 2;
   }
 
-  function canSee(observer, px, py, solids, range, halfAngle) {
-    const dx = px - observer.x, dy = py - observer.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > range) return false;
-    const ang = Math.atan2(dy, dx);
-    if (Math.abs(angleDiff(ang, observer.angle)) > halfAngle) return false;
-    return hasLineOfSight(observer.x, observer.y, px, py, solids);
+  update(dt) {
+    this.t += dt;
+    this.angle = Math.PI / 2 + Math.sin(this.t * this.speed) * this.amp;
   }
 
-  function makeGuard(def) {
-    const wp = def.waypoints;
-    return {
-      kind: def.kind,
-      waypoints: wp,
-      wpIndex: 1,
-      x: wp[0][0], y: wp[0][1],
-      angle: Math.PI / 2,
-      speed: def.speed || CFG.guardSpeed,
-      suspicion: 0,
-      state: 'patrol', // patrol | investigate | search
-      investigateX: 0, investigateY: 0,
-      investigateTimer: 0,
-      lookTimer: 0,
-      pauseTimer: 0,
-    };
+  sees(player, covers, sneak) {
+    const d = dist(this.x, this.y, player.x, player.y);
+    const range = sneak ? this.range * 0.8 : this.range;
+    if (d > range) return false;
+    const a = Math.atan2(player.y - this.y, player.x - this.x);
+    if (Math.abs(angleDiff(this.angle, a)) > this.halfAngle) return false;
+    if (!hasLineOfSight(this.x, this.y, player.x, player.y, covers)) return false;
+    return true;
   }
+}
 
-  function moveWithCollision(g, dx, dy, solids) {
-    const r = 13;
-    let nx = g.x + dx;
-    let blocked = false;
-    for (const s of solids) if (rectsOverlap(nx - r, g.y - r, r * 2, r * 2, s)) { blocked = true; break; }
-    if (!blocked) g.x = nx;
-    let ny = g.y + dy;
-    blocked = false;
-    for (const s of solids) if (rectsOverlap(g.x - r, ny - r, r * 2, r * 2, s)) { blocked = true; break; }
-    if (!blocked) g.y = ny;
+// Shared suspicion model: suspicion rises while any watcher sees the
+// player and decays while unseen. Returns the new suspicion value.
+export function updateSuspicion(suspicion, seen, dt, sneak) {
+  if (seen) {
+    const rate = sneak ? 28 : 45;
+    return clamp(suspicion + rate * dt, 0, 100);
   }
-
-  function updateGuard(g, dt, player, solids, audio) {
-    const seen = canSee(g, player.x, player.y, solids, CFG.visionRange, CFG.visionHalfAngle)
-      && !player.hidden;
-    if (g.state === 'investigate') {
-      const dx = g.investigateX - g.x, dy = g.investigateY - g.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist > 8) {
-        const sp = CFG.guardInvestigateSpeed * dt;
-        g.angle = Math.atan2(dy, dx);
-        moveWithCollision(g, (dx / dist) * sp, (dy / dist) * sp, solids);
-      } else {
-        g.investigateTimer -= dt;
-        g.angle += dt * 1.6;
-        if (g.investigateTimer <= 0) { g.state = 'patrol'; g.suspicion = Math.max(0, g.suspicion - 30); }
-      }
-    } else if (g.pauseTimer > 0) {
-      g.pauseTimer -= dt;
-      g.angle += dt * 0.9;
-    } else {
-      const target = g.waypoints[g.wpIndex];
-      const dx = target[0] - g.x, dy = target[1] - g.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 10) {
-        g.wpIndex = (g.wpIndex + 1) % g.waypoints.length;
-        g.pauseTimer = 0.8;
-      } else {
-        const sp = g.speed * dt;
-        g.angle = Math.atan2(dy, dx);
-        moveWithCollision(g, (dx / dist) * sp, (dy / dist) * sp, solids);
-      }
-    }
-    if (seen) {
-      const rate = player.sneaking ? CFG.suspicionRiseSneak : CFG.suspicionRise;
-      const before = g.suspicion;
-      g.suspicion = Math.min(100, g.suspicion + rate * dt);
-      if (before < 50 && g.suspicion >= 50 && audio) audio.suspicionSting();
-    } else {
-      g.suspicion = Math.max(0, g.suspicion - CFG.suspicionDecay * dt);
-    }
-    return seen;
-  }
-
-  function lureGuard(g, x, y) {
-    g.state = 'investigate';
-    g.investigateX = x; g.investigateY = y;
-    g.investigateTimer = 3.5;
-    g.suspicion = Math.max(g.suspicion, 35);
-  }
-
-  return { makeGuard, updateGuard, canSee, hasLineOfSight, angleDiff, lureGuard, moveWithCollision, rectsOverlap, pointInRect };
-})();
+  return clamp(suspicion - 26 * dt, 0, 100);
+}

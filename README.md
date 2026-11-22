@@ -1,75 +1,48 @@
-[![make.fun](https://make.fun/badge/best-heist-game-20261122-0559.svg)](https://make.fun/bounty/best-heist-game-20261122-0559)
-[![rank](https://make.fun/badge/best-heist-game-20261122-0559/maezageryan-del/curtain-call-stage-heist/rank.svg)](https://make.fun/bounty/best-heist-game-20261122-0559)
-[![reward](https://make.fun/badge/best-heist-game-20261122-0559/maezageryan-del/curtain-call-stage-heist/reward.svg)](https://make.fun/bounty/best-heist-game-20261122-0559)
-
 # CURTAIN CALL — steal the Star of the Stage
 
+[![make.fun bounty](https://img.shields.io/badge/make.fun-bounty-gold)](https://make.fun/bounty/best-heist-game-20261122-0559)
+[![bounty](https://img.shields.io/badge/bounty-best--heist--game--20261122--0559-burgundy)](https://make.fun/bounty/best-heist-game-20261122-0559)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 A top-down heist game set in the Grand Marlowe Theatre on opening night.
-Slip through three acts — the Auditorium, Backstage, and the Stage itself —
-steal the Star of the Stage diamond from its spotlight, and escape through
-the stage door as the house erupts.
+You are the thief. Cross three acts — the Auditorium, Backstage, and the
+Stage itself — slip past ushers, stagehands and the sweeping followspot,
+steal the **Star of the Stage** diamond from the spotlight, and vanish
+through the stage door while the house erupts.
+
+## How to play
+
+Open `game/index.html` in a desktop browser. No build step, no network.
+
+- **Move** — WASD / arrow keys, or click to walk
+- **Shift** — sneak (slower, quieter, harder to spot)
+- **E** — grab loot / interact
+- **1** — toss a rose (lures the nearest guard to the spot)
+- **2** — smoke puff (stage smoke hides you for ~4 seconds)
+- **3** — cut the footlights (a zone of shadow, but it raises the alarm)
+- **P** — pause · **R** — restart · **M** — mute
 
 ## The heist
 
-- **Act 1 — The Auditorium:** seat rows, velvet ropes, and ushers sweeping
-  the aisles with torch cones. Grab the box-office cashbox and the patron's
-  sapphire, then slip backstage.
-- **Act 2 — Backstage:** costume rails for cover, stagehands with lantern
-  cones, trapdoors and a grand piano. Take the prop-room ruby and the leading
-  lady's tiara, then step onto the stage.
-- **Act 3 — The Stage:** the great followspot sweeps the boards like a
-  searchlight, the stage manager patrols, and wing cameras watch the exits.
-  Cut the footlights to make shadow, grab the diamond, and reach the stage
-  door for the getaway.
+- **Act 1 — The Auditorium.** Seat rows, torch-wielding ushers, a
+  chandelier, and the box-office cashbox.
+- **Act 2 — Backstage.** Costume rails, lantern-carrying stagehands,
+  trapdoors, and props worth lifting.
+- **Act 3 — The Stage.** A giant followspot sweeps the boards in rhythm,
+  the stage manager patrols, and the diamond glows centre-stage. Grab it
+  and reach the stage door to win.
 
-## Mechanics
+Guards see in cones. Being seen raises suspicion; break line of sight and
+it decays. At full suspicion you get a 2-second **SPOTTED!** warning —
+break the line of sight before it ends or the alarm fills and you are
+caught. Footsteps on the wooden stage ring out as visible noise rings;
+the stage bell masks noise on a timer. Loot quota gates each act's exit.
 
-- **Vision cones with line of sight:** ushers, stagehands, cameras, and the
-  followspot only see you inside their cone with a clear line — walls,
-  seat rows, and costume rails block their gaze.
-- **Suspicion, then a fair warning:** being seen raises suspicion
-  (suspicion → investigate → search), which decays when you hide. At full
-  suspicion you get a 2-second **SPOTTED!** warning to break line of sight
-  before you are caught.
-- **Tools at a cost:** `1` toss a rose to lure the nearest guard to a spot,
-  `2` puff stage smoke to vanish for a few seconds, `3` cut the footlights
-  to make a shadow zone (costs alarm). Stocks are limited and shown in the HUD.
-- **Sound as a mechanic:** footsteps on the wooden stage ring out as visible
-  noise rings; sneak to move quietly. A stage bell masks noise on a timer.
-- **Alarm meter:** the HUD alarm follows the hottest suspicion and cools
-  when nobody sees you.
+## Screenshots
 
-## Controls
+`1-cover.jpg` — the stage mid-sweep · `2-auditorium.jpg` — between the
+seat rows · `3-nearmiss.jpg` — a cone about to cross the thief ·
+`4-getaway.jpg` — the stage door with the diamond.
 
-- **WASD / arrows** — move (or click to walk)
-- **Mouse** — aim the rose toss
-- **Shift** — sneak (slower, quieter, harder to spot)
-- **E** — grab loot / interact
-- **1 / 2 / 3** — rose lure / smoke puff / cut footlights
-- **P** — pause · **R** — restart · **M** — mute
-
-## Play it
-
-Open `game/index.html` in desktop Chrome — the game starts immediately on
-the first screen, no landing page. All art is drawn on canvas and all sound
-is synthesised with WebAudio; the game makes no network requests.
-
-## Layout
-
-- `game/src/config.js` — tuning, palette, tool stocks
-- `game/src/input.js` — keyboard and mouse
-- `game/src/audio.js` — synthesised sound effects
-- `game/src/levels.js` — the three acts (rooms, loot, patrols, cameras)
-- `game/src/guards.js` — patrols, vision cones, suspicion
-- `game/src/cameras.js` — wall cameras and the followspot
-- `game/src/player.js` — the thief, noise rings, loot pickup
-- `game/src/tools.js` — rose, smoke, footlights
-- `game/src/render.js` — canvas drawing, HUD, overlays
-- `game/src/game.js` — state machine, alarm, win/lose
-- `game/src/shots.js` — deterministic screenshot staging
-- `game/src/main.js` — boot and game loop
-- `main.ts` — hands the game in (copies `game/` + `screenshots/`, writes `dossier.json`)
-
-## License
-
-MIT — see `LICENSE`.
+Built for the make.fun bounty
+[best-heist-game-20261122-0559](https://make.fun/bounty/best-heist-game-20261122-0559).

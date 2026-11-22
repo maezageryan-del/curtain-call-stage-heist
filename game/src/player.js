@@ -1,76 +1,99 @@
-// CURTAIN CALL — the thief: movement, sneak, click-to-walk, noise rings,
-// grabbing loot, and the stage-door exit.
-window.CURTAIN_PLAYER = (function () {
-  const CFG = window.CURTAIN_CONFIG;
-  const G = window.CURTAIN_GUARDS;
-  const INPUT = window.CURTAIN_INPUT;
+// The thief. One job: movement, sneaking, footsteps, and noise rings.
 
-  function makePlayer(start) {
-    return {
-      x: start.x, y: start.y, r: 14,
-      sneaking: false, hidden: false,
-      walkTarget: null,
-      noiseTimer: 0,
-      noiseRings: [],
-      stepTimer: 0,
-      facing: -Math.PI / 2,
-    };
+import { circleHitsRect, clamp, dist, W, H, HUD_H } from './config.js';
+
+export class Player {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.r = 13;
+    this.speed = 175;
+    this.sneakSpeed = 95;
+    this.dirX = 0;
+    this.dirY = 1;
+    this.moving = false;
+    this.sneaking = false;
+    this.stepTimer = 0;
+    this.rings = []; // visible noise rings from footsteps
+    this.clickTarget = null; // click-to-walk destination
+    this.smokeTimer = 0; // seconds of smoke cover remaining
+    this.hidden = false; // inside smoke or footlight shadow
   }
 
-  function moveWithCollision(p, dx, dy, solids) {
-    const r = p.r;
-    let nx = p.x + dx;
-    let blocked = false;
-    for (const s of solids) if (G.rectsOverlap(nx - r, p.y - r, r * 2, r * 2, s)) { blocked = true; break; }
-    if (!blocked) p.x = nx;
-    let ny = p.y + dy;
-    blocked = false;
-    for (const s of solids) if (G.rectsOverlap(p.x - r, ny - r, r * 2, r * 2, s)) { blocked = true; break; }
-    if (!blocked) p.y = ny;
+  reset(x, y) {
+    this.x = x;
+    this.y = y;
+    this.rings = [];
+    this.clickTarget = null;
+    this.smokeTimer = 0;
+    this.hidden = false;
   }
 
-  function updatePlayer(p, dt, solids, audio) {
-    p.sneaking = !!INPUT.keys['shift'];
-    const mv = INPUT.moveVector();
-    let mx = mv.x, my = mv.y;
-    if (mx === 0 && my === 0 && p.walkTarget) {
-      const dx = p.walkTarget.x - p.x, dy = p.walkTarget.y - p.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 10) { p.walkTarget = null; }
-      else { mx = dx / dist; my = dy / dist; }
+  update(dt, input, covers, audio, bellMasking) {
+    this.sneaking = input.sneak();
+    const speed = this.sneaking ? this.sneakSpeed : this.speed;
+    let vx = 0;
+    let vy = 0;
+    const mv = input.moveVector();
+    if (mv.x !== 0 || mv.y !== 0) {
+      vx = mv.x;
+      vy = mv.y;
+      this.clickTarget = null;
+    } else if (input.mouse.clicked) {
+      this.clickTarget = { x: input.mouse.clickX, y: input.mouse.clickY };
     }
-    const speed = (p.sneaking ? CFG.sneakSpeed : CFG.walkSpeed) * dt;
-    if (mx !== 0 || my !== 0) {
-      p.facing = Math.atan2(my, mx);
-      moveWithCollision(p, mx * speed, my * speed, solids);
-      p.stepTimer -= dt;
-      if (p.stepTimer <= 0) {
-        p.stepTimer = p.sneaking ? 0.55 : 0.34;
-        if (audio) audio.footstep(p.sneaking);
-        p.noiseRings.push({ x: p.x, y: p.y, r: 6, max: p.sneaking ? 26 : 52, alpha: 0.5 });
+    if (this.clickTarget) {
+      const d = dist(this.x, this.y, this.clickTarget.x, this.clickTarget.y);
+      if (d < 6) {
+        this.clickTarget = null;
+      } else {
+        vx = (this.clickTarget.x - this.x) / d;
+        vy = (this.clickTarget.y - this.y) / d;
       }
     }
-    if (INPUT.consumeClick()) {
-      p.walkTarget = { x: INPUT.mouse.clickX, y: INPUT.mouse.clickY };
+    this.moving = vx !== 0 || vy !== 0;
+    if (this.moving) {
+      this.dirX = vx;
+      this.dirY = vy;
+      // Axis-separated movement so the thief slides along cover.
+      const nx = this.x + vx * speed * dt;
+      if (!this.hitsCover(nx, this.y, covers)) this.x = nx;
+      const ny = this.y + vy * speed * dt;
+      if (!this.hitsCover(this.x, ny, covers)) this.y = ny;
+      this.x = clamp(this.x, 30, W - 30);
+      this.y = clamp(this.y, HUD_H + 14, H - 26);
+      // Footsteps: a soft knock, and a visible ring on the wooden stage.
+      this.stepTimer -= dt;
+      if (this.stepTimer <= 0) {
+        this.stepTimer = this.sneaking ? 0.55 : 0.38;
+        audio.step(this.sneaking);
+        if (!this.sneaking && !bellMasking) {
+          this.rings.push({ x: this.x, y: this.y, r: 8, max: 64, life: 0.9 });
+        }
+      }
     }
-    for (const ring of p.noiseRings) { ring.r += dt * 55; ring.alpha -= dt * 0.55; }
-    p.noiseRings = p.noiseRings.filter((ring) => ring.alpha > 0 && ring.r < ring.max);
-  }
-
-  // Nearest loot within reach; returns it or null.
-  function lootInReach(p, loot) {
-    let best = null, bestD = 46;
-    for (const item of loot) {
-      if (item.taken) continue;
-      const d = Math.hypot(item.x - p.x, item.y - p.y);
-      if (d < bestD) { bestD = d; best = item; }
+    // Noise rings expand and fade.
+    for (const ring of this.rings) {
+      ring.r += 90 * dt;
+      ring.life -= dt;
     }
-    return best;
+    this.rings = this.rings.filter((r) => r.life > 0);
+    if (this.smokeTimer > 0) this.smokeTimer -= dt;
   }
 
-  function atExit(p, exit) {
-    return p.x > exit.x - 6 && p.x < exit.x + exit.w + 6 && p.y > exit.y && p.y < exit.y + exit.h;
+  hitsCover(x, y, covers) {
+    for (const c of covers) {
+      if (circleHitsRect(x, y, this.r, c)) return true;
+    }
+    return false;
   }
 
-  return { makePlayer, updatePlayer, moveWithCollision, lootInReach, atExit };
-})();
+  // Is the thief inside a shadow zone (smoke or cut footlights)?
+  inShadow(shadowZones) {
+    if (this.smokeTimer > 0) return true;
+    for (const z of shadowZones) {
+      if (this.x > z.x && this.x < z.x + z.w && this.y > z.y && this.y < z.y + z.h) return true;
+    }
+    return false;
+  }
+}

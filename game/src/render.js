@@ -1,408 +1,742 @@
-// CURTAIN CALL — every pixel the judge sees: velvet, gold, footlights,
-// vision cones, the diamond, and the alarm meter drawn on the canvas HUD.
-window.CURTAIN_RENDER = (function () {
-  const CFG = window.CURTAIN_CONFIG;
-  const P = CFG.palette;
+// All canvas drawing for CURTAIN CALL. One job: turn the game state into
+// the picture the judge sees — the theatre, the cones, the loot, the HUD.
 
-  function rr(ctx, x, y, w, h, r) {
+import { PAL, W, H, HUD_H, clamp } from './config.js';
+
+function conePath(ctx, x, y, angle, range, halfAngle) {
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.arc(x, y, range, angle - halfAngle, angle + halfAngle);
+  ctx.closePath();
+}
+
+function drawCone(ctx, x, y, angle, range, halfAngle, fill, edge) {
+  conePath(ctx, x, y, angle, range, halfAngle);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// Deterministic speckle hash: the same tile always gets the same speck.
+function speckHash(x, y) {
+  let h = (x * 73856093) ^ (y * 19349663);
+  h = (h ^ (h >> 13)) * 1274126177;
+  return ((h ^ (h >> 16)) >>> 0) / 4294967295;
+}
+
+// Floor texture: carpet runners and gold specks in the house, plank seams
+// and knots on the stage boards, scuffs backstage — so the floor is a
+// place, not a flat colour.
+function drawFloorTexture(ctx, game) {
+  if (game.act === 2) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.lineWidth = 1;
+    for (let x = 136; x < W - 90; x += 46) {
+      ctx.beginPath();
+      ctx.moveTo(x, HUD_H + 20);
+      ctx.lineTo(x, H - 20);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    for (let y = 100; y < H - 40; y += 52) {
+      for (let x = 110; x < W - 110; x += 92) {
+        if (speckHash(x, y) > 0.72) {
+          ctx.beginPath();
+          ctx.ellipse(x, y, 7, 4, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    return;
+  }
+  // Carpet runners down the aisles, gold-trimmed.
+  const aisles = [[280, 80], [600, 80], [920, 80]];
+  for (const [ax, aw] of aisles) {
+    ctx.fillStyle = '#4a0a1c';
+    ctx.fillRect(ax, HUD_H + 20, aw, H - HUD_H - 40);
+    ctx.fillStyle = PAL.goldDim;
+    ctx.fillRect(ax, HUD_H + 20, 3, H - HUD_H - 40);
+    ctx.fillRect(ax + aw - 3, HUD_H + 20, 3, H - HUD_H - 40);
+    ctx.fillStyle = 'rgba(242,193,78,0.35)';
+    for (let y = HUD_H + 40; y < H - 30; y += 44) {
+      ctx.fillRect(ax + aw / 2 - 8, y, 16, 3);
+    }
+  }
+  // Gold specks and dropped programmes on the house floor.
+  for (let y = HUD_H + 30; y < H - 20; y += 26) {
+    for (let x = 40; x < W - 40; x += 26) {
+      const h = speckHash(x, y);
+      if (h > 0.93) {
+        ctx.fillStyle = 'rgba(242,193,78,0.5)';
+        ctx.fillRect(x, y, 2, 2);
+      } else if (h > 0.90) {
+        ctx.fillStyle = 'rgba(245,230,200,0.5)';
+        ctx.fillRect(x, y, 6, 4);
+      }
+    }
+  }
+  // Framed posters on the side walls.
+  const posters = ['#7d1226', '#1f4d6b', '#6b2d5e', '#3d6b3a'];
+  for (let i = 0; i < 4; i++) {
+    const py = 150 + i * 130;
+    for (const px of [4, W - 22]) {
+      ctx.fillStyle = posters[i % posters.length];
+      ctx.fillRect(px, py, 18, 52);
+      ctx.strokeStyle = PAL.gold;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(px + 1, py + 1, 16, 50);
+      ctx.fillStyle = PAL.cream;
+      ctx.fillRect(px + 5, py + 10, 8, 8);
+      ctx.fillRect(px + 4, py + 26, 10, 2);
+      ctx.fillRect(px + 4, py + 32, 10, 2);
+    }
+  }
+}
+
+// --- set pieces -----------------------------------------------------------
+
+function drawCover(ctx, c, t) {
+  if (c.kind === 'seats') {
+    ctx.fillStyle = PAL.seat;
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = PAL.seatTop;
+    const seats = Math.floor(c.w / 26);
+    for (let i = 0; i < seats; i++) {
+      const sx = c.x + 4 + i * 26;
+      ctx.beginPath();
+      ctx.arc(sx + 9, c.y + 17, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = PAL.velvetBright;
+      ctx.fillRect(sx, c.y + 4, 18, 8);
+      ctx.fillStyle = PAL.seatTop;
+    }
+    ctx.fillStyle = 'rgba(242,193,78,0.25)';
+    ctx.fillRect(c.x, c.y + c.h - 3, c.w, 2);
+    // A few seats hold audience members — dark heads in the stalls.
+    const hair = ['#2a1a12', '#4a3a28', '#6b6b6b', '#1a1a1a', '#7a5a3a'];
+    for (let i = 0; i < seats; i++) {
+      if (speckHash(c.x + i * 26, c.y) > 0.68) {
+        ctx.fillStyle = hair[Math.floor(speckHash(c.y, c.x + i) * hair.length)];
+        ctx.beginPath();
+        ctx.arc(c.x + 13 + i * 26, c.y + 8, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    return;
+  }
+  if (c.kind === 'rail') {
+    ctx.fillStyle = '#2c1c10';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = PAL.velvet;
+    ctx.fillRect(c.x - 3, c.y, c.w + 6, 6);
+    const dresses = ['#7d1226', '#1f4d6b', '#c9a35a', '#3d6b3a', '#6b2d5e'];
+    for (let i = 0; i < Math.floor(c.h / 34); i++) {
+      ctx.fillStyle = dresses[i % dresses.length];
+      const dy = c.y + 10 + i * 34;
+      ctx.beginPath();
+      ctx.moveTo(c.x + c.w / 2, dy);
+      ctx.lineTo(c.x - 2, dy + 28);
+      ctx.lineTo(c.x + c.w + 2, dy + 28);
+      ctx.closePath();
+      ctx.fill();
+    }
+    return;
+  }
+  if (c.kind === 'crate') {
+    ctx.fillStyle = PAL.wood;
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = PAL.woodLight;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(c.x + 3, c.y + 3, c.w - 6, c.h - 6);
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
+    ctx.moveTo(c.x, c.y);
+    ctx.lineTo(c.x + c.w, c.y + c.h);
+    ctx.moveTo(c.x + c.w, c.y);
+    ctx.lineTo(c.x, c.y + c.h);
+    ctx.stroke();
+    ctx.fillStyle = PAL.gold;
+    ctx.font = 'bold 13px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('PROPS', c.x + c.w / 2, c.y + c.h / 2 + 5);
+    return;
+  }
+  if (c.kind === 'booth') {
+    ctx.fillStyle = '#3a2415';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = PAL.goldDim;
+    ctx.fillRect(c.x, c.y, c.w, 8);
+    ctx.fillStyle = PAL.cream;
+    ctx.font = 'bold 12px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('BOX OFFICE', c.x + c.w / 2, c.y + 34);
+    return;
+  }
+  if (c.kind === 'mirror') {
+    ctx.fillStyle = '#2a2a33';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = 'rgba(180,200,230,0.35)';
+    ctx.fillRect(c.x + 8, c.y + 8, c.w - 16, c.h - 16);
+    ctx.strokeStyle = PAL.gold;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(c.x + 2, c.y + 2, c.w - 4, c.h - 4);
+    return;
+  }
+  if (c.kind === 'piano') {
+    ctx.fillStyle = '#120a08';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = '#1d1008';
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y);
+    ctx.lineTo(c.x + c.w, c.y);
+    ctx.lineTo(c.x + c.w - 20, c.y + c.h);
+    ctx.lineTo(c.x, c.y + c.h);
     ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f5e6c8';
+    for (let i = 0; i < 14; i++) ctx.fillRect(c.x + 8 + i * 8, c.y + c.h - 16, 7, 12);
+    ctx.fillStyle = PAL.gold;
+    ctx.beginPath();
+    ctx.arc(c.x + c.w - 30, c.y + 22, 10, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (c.kind === 'settee') {
+    ctx.fillStyle = PAL.velvet;
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = PAL.velvetBright;
+    ctx.fillRect(c.x, c.y, c.w, 12);
+    ctx.fillStyle = PAL.gold;
+    ctx.fillRect(c.x, c.y + c.h - 6, c.w, 4);
+    return;
+  }
+  if (c.kind === 'curtainSide') {
+    ctx.fillStyle = PAL.curtain;
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = PAL.curtainDark;
+    for (let i = 0; i < c.h / 28; i++) {
+      ctx.fillRect(c.x + (i % 2) * 14, c.y + i * 28, 10, 28);
+    }
+    ctx.fillStyle = PAL.gold;
+    ctx.fillRect(c.x + c.w - 4, c.y, 4, c.h);
+    return;
+  }
+  ctx.fillStyle = '#333';
+  ctx.fillRect(c.x, c.y, c.w, c.h);
+}
+
+function drawDecor(ctx, d, t, game) {
+  if (d.kind === 'chandelier') {
+    const sway = Math.sin(t * 0.7) * 3;
+    ctx.save();
+    ctx.translate(d.x + sway, d.y);
+    ctx.strokeStyle = PAL.goldDim;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -HUD_H - 4);
+    ctx.lineTo(0, 0);
+    ctx.stroke();
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 90);
+    glow.addColorStop(0, 'rgba(255, 220, 130, 0.35)');
+    glow.addColorStop(1, 'rgba(255, 220, 130, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, 90, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = PAL.gold;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff6d8';
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * 26, Math.sin(a) * 14, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
+  if (d.kind === 'curtain') {
+    ctx.fillStyle = PAL.curtain;
+    ctx.fillRect(24, HUD_H + 2, 220, 16);
+    ctx.fillRect(W - 244, HUD_H + 2, 220, 16);
+    ctx.fillStyle = PAL.curtainDark;
+    for (let i = 0; i < 10; i++) {
+      ctx.fillRect(30 + i * 22, HUD_H + 2, 8, 16);
+      ctx.fillRect(W - 238 + i * 22, HUD_H + 2, 8, 16);
+    }
+    ctx.fillStyle = PAL.gold;
+    ctx.fillRect(24, HUD_H + 16, 220, 3);
+    ctx.fillRect(W - 244, HUD_H + 16, 220, 3);
+    return;
+  }
+  if (d.kind === 'rope') {
+    ctx.strokeStyle = PAL.goldDim;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(d.x - 40, d.y);
+    ctx.quadraticCurveTo(d.x, d.y + 16, d.x + 40, d.y);
+    ctx.stroke();
+    ctx.fillStyle = PAL.velvetBright;
+    ctx.fillRect(d.x - 42, d.y - 14, 5, 16);
+    ctx.fillRect(d.x + 37, d.y - 14, 5, 16);
+    return;
+  }
+  if (d.kind === 'trapdoor') {
+    ctx.strokeStyle = PAL.woodLight;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(d.x - 34, d.y - 24, 68, 48);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(d.x - 34, d.y - 24, 68, 48);
+    ctx.fillStyle = PAL.goldDim;
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (d.kind === 'footlights') {
+    for (let i = 0; i < 16; i++) {
+      const fx = 60 + i * 76;
+      const on = !game.lightsCut;
+      const flick = on ? 0.75 + Math.sin(t * 3 + i) * 0.15 : 0.08;
+      const g = ctx.createRadialGradient(fx, 664, 2, fx, 664, 46);
+      g.addColorStop(0, `rgba(255, 220, 140, ${flick})`);
+      g.addColorStop(1, 'rgba(255, 220, 140, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(fx, 664, 46, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = on ? '#ffd98a' : '#3a3325';
+      ctx.beginPath();
+      ctx.arc(fx, 664, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
+  if (d.kind === 'spotlight') {
+    const pulse = 0.5 + Math.sin(t * 2.2) * 0.2;
+    const g = ctx.createRadialGradient(d.x, d.y, 6, d.x, d.y, 110);
+    g.addColorStop(0, `rgba(255, 250, 220, ${0.55 * pulse})`);
+    g.addColorStop(1, 'rgba(255, 250, 220, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, 110, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+}
+
+// --- loot, people, effects ------------------------------------------------
+
+function drawLoot(ctx, loot, t) {
+  for (const l of loot) {
+    if (l.taken) continue;
+    const tw = 0.6 + Math.sin(t * 3 + l.x) * 0.25;
+    const g = ctx.createRadialGradient(l.x, l.y, 2, l.x, l.y, l.diamond ? 46 : 30);
+    g.addColorStop(0, `rgba(255, 215, 90, ${0.55 * tw})`);
+    g.addColorStop(1, 'rgba(255, 215, 90, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(l.x, l.y, l.diamond ? 46 : 30, 0, Math.PI * 2);
+    ctx.fill();
+    if (l.diamond) {
+      ctx.save();
+      ctx.translate(l.x, l.y);
+      ctx.rotate(Math.sin(t * 1.5) * 0.1);
+      ctx.fillStyle = '#cfe9ff';
+      ctx.beginPath();
+      ctx.moveTo(0, -20);
+      ctx.lineTo(16, -6);
+      ctx.lineTo(10, 14);
+      ctx.lineTo(-10, 14);
+      ctx.lineTo(-16, -6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(0, -20);
+      ctx.lineTo(16, -6);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(-16, -6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#7fb8e8';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = '#ffe9a8';
+      ctx.font = 'bold 12px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('THE STAR OF THE STAGE', l.x, l.y - 32);
+    } else {
+      ctx.fillStyle = PAL.gold;
+      ctx.beginPath();
+      ctx.arc(l.x, l.y, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff3c4';
+      ctx.beginPath();
+      ctx.arc(l.x - 3, l.y - 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Sparkles.
+      ctx.fillStyle = `rgba(255, 240, 180, ${tw})`;
+      for (let i = 0; i < 4; i++) {
+        const a = t * 1.4 + i * 1.7;
+        ctx.fillRect(l.x + Math.cos(a) * 16 - 1, l.y + Math.sin(a) * 16 - 1, 2, 2);
+      }
+    }
+  }
+}
+
+function drawGuard(ctx, g, t) {
+  // Vision cone.
+  const alert = g.state !== 'patrol';
+  drawCone(ctx, g.x, g.y, g.angle, g.range, g.halfAngle,
+    alert ? 'rgba(255, 90, 60, 0.30)' : PAL.cone, alert ? 'rgba(255,120,90,0.6)' : PAL.coneEdge);
+  // Body: a little usher in a dark uniform with a gold torch.
+  ctx.save();
+  ctx.translate(g.x, g.y);
+  ctx.fillStyle = '#1c1420';
+  ctx.beginPath();
+  ctx.arc(0, 0, 13, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = g.color;
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.fillStyle = g.color;
+  ctx.beginPath();
+  ctx.arc(0, 0, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // Torch / lantern beam nub.
+  const tx = Math.cos(g.angle) * 18;
+  const ty = Math.sin(g.angle) * 18;
+  ctx.fillStyle = '#ffe9a8';
+  ctx.beginPath();
+  ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  if (alert) {
+    ctx.fillStyle = '#ff6b5e';
+    ctx.font = 'bold 16px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('?', g.x, g.y - 22);
+  }
+}
+
+function drawCamera(ctx, cam, t) {
+  drawCone(ctx, cam.x, cam.y, cam.angle, cam.range, cam.halfAngle,
+    'rgba(255, 120, 90, 0.20)', 'rgba(255, 120, 90, 0.45)');
+  ctx.save();
+  ctx.translate(cam.x, cam.y);
+  ctx.rotate(cam.angle);
+  ctx.fillStyle = '#22242c';
+  ctx.fillRect(-6, -6, 16, 12);
+  ctx.fillStyle = '#444';
+  ctx.fillRect(8, -4, 8, 8);
+  ctx.restore();
+  const on = Math.floor(cam.blink * 2) % 2 === 0;
+  ctx.fillStyle = on ? '#ff3b30' : '#5a1010';
+  ctx.beginPath();
+  ctx.arc(cam.x, cam.y - 8, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawPlayer(ctx, p, t, hidden) {
+  // Shadow of the thief.
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + 10, 12, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  // Cloak.
+  ctx.fillStyle = hidden ? '#3a3f5e' : '#232030';
+  ctx.beginPath();
+  ctx.moveTo(0, -13);
+  ctx.quadraticCurveTo(12, 0, 9, 12);
+  ctx.lineTo(-9, 12);
+  ctx.quadraticCurveTo(-12, 0, 0, -13);
+  ctx.fill();
+  ctx.strokeStyle = PAL.goldDim;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // Hooded head.
+  ctx.fillStyle = '#191420';
+  ctx.beginPath();
+  ctx.arc(0, -4, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = hidden ? '#8fb8ff' : '#ffd98a';
+  ctx.beginPath();
+  ctx.arc(0, -4, 3, 0, Math.PI * 2);
+  ctx.fill();
+  // Facing tick.
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(p.dirX * 12, p.dirY * 12);
+  ctx.stroke();
+  ctx.restore();
+  if (hidden) {
+    ctx.fillStyle = 'rgba(200,210,255,0.8)';
+    ctx.font = 'bold 11px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('HIDDEN', p.x, p.y - 22);
+  }
+}
+
+// --- HUD and overlays -----------------------------------------------------
+
+function drawHUD(ctx, game) {
+  ctx.fillStyle = '#12081a';
+  ctx.fillRect(0, 0, W, HUD_H);
+  ctx.fillStyle = PAL.gold;
+  ctx.fillRect(0, HUD_H - 3, W, 3);
+  ctx.fillStyle = PAL.cream;
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('CURTAIN CALL', 18, 26);
+  ctx.fillStyle = PAL.gold;
+  ctx.font = '13px Georgia, serif';
+  ctx.fillText(game.level.name, 18, 46);
+  // Alarm meter.
+  const ax = 330;
+  const aw = 260;
+  ctx.fillStyle = '#2a0d12';
+  ctx.fillRect(ax, 12, aw, 16);
+  ctx.fillStyle = game.alarm > 70 ? '#ff2e2e' : game.alarm > 40 ? '#ff8a2e' : PAL.alarm;
+  ctx.fillRect(ax, 12, (aw * clamp(game.alarm, 0, 100)) / 100, 16);
+  ctx.strokeStyle = PAL.gold;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(ax, 12, aw, 16);
+  ctx.fillStyle = PAL.cream;
+  ctx.font = 'bold 12px Georgia, serif';
+  ctx.fillText('ALARM', ax, 42);
+  ctx.fillText(`${Math.round(game.alarm)}%`, ax + aw + 8, 26);
+  // Suspicion pips.
+  ctx.fillStyle = game.suspicion > 80 ? '#ff5a4d' : '#ffb347';
+  ctx.font = 'bold 13px Georgia, serif';
+  ctx.fillText(`SUSPICION ${Math.round(game.suspicion)}%`, ax + aw + 64, 42);
+  // Loot + quota.
+  ctx.fillStyle = PAL.gold;
+  ctx.font = 'bold 15px Georgia, serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`LOOT ${game.lootCount}/${game.level.quota}  ◆ ${game.diamond ? 'STAR ✓' : 'STAR —'}`, W - 16, 26);
+  ctx.font = '13px Georgia, serif';
+  ctx.fillStyle = PAL.cream;
+  ctx.fillText(`[1] Rose ×${game.tools.rose}  [2] Smoke ×${game.tools.smoke}  [3] Lights ×${game.tools.lights}`, W - 16, 46);
+  ctx.textAlign = 'left';
+}
+
+function drawHint(ctx, game) {
+  ctx.fillStyle = 'rgba(10,6,16,0.72)';
+  ctx.fillRect(0, H - 26, W, 26);
+  ctx.fillStyle = PAL.cream;
+  ctx.font = '13px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(game.level.hint, W / 2, H - 8);
+  ctx.textAlign = 'left';
+}
+
+// --- main render ----------------------------------------------------------
+
+export function render(ctx, game, t) {
+  const level = game.level;
+  // Floor: dark auditorium boards with a subtle checker.
+  ctx.fillStyle = game.act === 2 ? '#171021' : PAL.floor;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,0.02)';
+  const tile = 64;
+  for (let y = HUD_H; y < H; y += tile) {
+    for (let x = 0; x < W; x += tile) {
+      if (((x / tile) + (y / tile)) % 2 === 0) ctx.fillRect(x, y, tile, tile);
+    }
+  }
+  // Stage boards in act 3.
+  if (game.act === 2) {
+    ctx.fillStyle = PAL.stage;
+    ctx.fillRect(90, HUD_H + 20, W - 180, H - HUD_H - 40);
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    for (let y = HUD_H + 40; y < H; y += 26) {
+      ctx.beginPath();
+      ctx.moveTo(90, y);
+      ctx.lineTo(W - 90, y);
+      ctx.stroke();
+    }
+  }
+  drawFloorTexture(ctx, game);
+  // Walls.
+  ctx.fillStyle = '#0d0714';
+  ctx.fillRect(0, HUD_H, W, 8);
+  ctx.fillRect(0, H - 8, W, 8);
+  ctx.fillRect(0, HUD_H, 24, H - HUD_H);
+  ctx.fillRect(W - 24, HUD_H, 24, H - HUD_H);
+  ctx.fillStyle = PAL.goldDim;
+  ctx.fillRect(0, HUD_H + 8, W, 2);
+  ctx.fillRect(0, H - 10, W, 2);
+
+  // Exit door.
+  const ex = level.exit;
+  ctx.fillStyle = game.exitOpen ? '#2f7a3a' : '#5a1f1f';
+  ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
+  ctx.strokeStyle = PAL.gold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(ex.x, ex.y, ex.w, ex.h);
+  ctx.fillStyle = '#ffe9a8';
+  ctx.font = 'bold 11px Georgia, serif';
+  ctx.textAlign = 'center';
+  const label = game.act === 2 ? 'STAGE DOOR' : ex.label;
+  ctx.fillText(label, ex.x + ex.w / 2, ex.y - 8);
+  if (game.act === 2) {
+    ctx.fillStyle = 'rgba(255,233,168,0.85)';
+    ctx.fillText('EXIT →', ex.x - 8, ex.y + ex.h / 2 + 4);
   }
 
-  function drawCone(ctx, x, y, angle, range, halfAngle, fill) {
+  // Decor behind cover.
+  for (const d of level.decor) drawDecor(ctx, d, t, game);
+
+  // Shadow zones (cut footlights). Labels are drawn later, after the
+  // cover, so set pieces never sit on top of the text.
+  for (const z of game.tools.shadowZones) {
+    ctx.fillStyle = PAL.shadow;
+    ctx.fillRect(z.x, z.y, z.w, z.h);
+    ctx.strokeStyle = 'rgba(150,170,255,0.5)';
+    ctx.strokeRect(z.x, z.y, z.w, z.h);
+  }
+
+  // Smoke clouds.
+  for (const c of game.tools.smokeClouds) {
+    const g = ctx.createRadialGradient(c.x, c.y, 4, c.x, c.y, c.r);
+    g.addColorStop(0, 'rgba(210,210,220,0.55)');
+    g.addColorStop(1, 'rgba(210,210,220,0)');
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.arc(x, y, range, angle - halfAngle, angle + halfAngle);
-    ctx.closePath();
-    ctx.fillStyle = fill;
+    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  function seededRand(seed) {
-    let s = seed >>> 0;
-    return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  // Followspot cone (drawn under the guards so the sweep reads).
+  if (game.followspot) {
+    drawCone(ctx, game.followspot.x, game.followspot.y, game.followspot.angle,
+      game.followspot.range, game.followspot.halfAngle, PAL.spot, 'rgba(255,244,200,0.6)');
+    ctx.fillStyle = '#fff6d8';
+    ctx.beginPath();
+    ctx.arc(game.followspot.x, game.followspot.y, 8, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  function drawFloor(ctx, act, time) {
-    if (act.floor === 'carpet') {
-      ctx.fillStyle = P.carpetDark;
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = P.carpet;
-      for (let y = 76; y < 710; y += 46) ctx.fillRect(10, y, 1260, 22);
-      // Woven diamond lattice so the carpet is never a flat field.
-      const rnd = seededRand(77);
-      ctx.fillStyle = 'rgba(217,164,65,0.13)';
-      for (let y = 88; y < 710; y += 44) {
-        for (let x = 30 + ((y / 44) % 2) * 28; x < 1270; x += 56) {
-          ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
-        }
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.14)';
-      for (let i = 0; i < 160; i++) ctx.fillRect(10 + rnd() * 1260, 66 + rnd() * 644, 2, 2);
-      ctx.strokeStyle = 'rgba(217,164,65,0.25)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(640, 66); ctx.lineTo(640, 710); ctx.stroke();
-    } else {
-      ctx.fillStyle = P.floorWoodDark;
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = P.floorWood;
-      for (let y = 66; y < 710; y += 34) ctx.fillRect(10, y, 1260, 26);
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = 1;
-      for (let x = 10; x < 1280; x += 86) { ctx.beginPath(); ctx.moveTo(x, 66); ctx.lineTo(x, 710); ctx.stroke(); }
-      // Wood grain: short dark strokes and knots, seeded so the boards never shimmer.
-      const rnd = seededRand(1234);
-      ctx.strokeStyle = 'rgba(0,0,0,0.20)';
-      ctx.lineWidth = 1;
-      for (let i = 0; i < 260; i++) {
-        const x = 12 + rnd() * 1250, y = 70 + rnd() * 636, len = 14 + rnd() * 30;
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + len, y + (rnd() - 0.5) * 3); ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      for (let i = 0; i < 26; i++) {
-        const x = 20 + rnd() * 1240, y = 76 + rnd() * 630;
-        ctx.beginPath(); ctx.ellipse(x, y, 5 + rnd() * 4, 3 + rnd() * 2, 0, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-    // Gold proscenium line at the top of the room.
-    ctx.fillStyle = P.gold;
-    ctx.fillRect(10, 66, 1260, 4);
+  // Cameras, then guards, then loot, then cover, then the thief.
+  for (const cam of game.cameras) drawCamera(ctx, cam, t);
+  for (const g of game.guards) drawGuard(ctx, g, t);
+  drawLoot(ctx, level.loot, t);
+  for (const c of level.covers) drawCover(ctx, c, t);
+  for (const z of game.tools.shadowZones) {
+    ctx.fillStyle = 'rgba(200,210,255,0.9)';
+    ctx.font = 'bold 12px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SHADOW — the footlights are out', z.x + z.w / 2, z.y + z.h - 10);
   }
 
-  function drawDecor(ctx, act, time) {
-    for (const d of act.decor) {
-      if (d.kind === 'seats') {
-        ctx.fillStyle = P.velvetDark;
-        rr(ctx, d.x, d.y, d.w, d.h, 10); ctx.fill();
-        ctx.fillStyle = P.velvet;
-        for (let i = 0; i < 8; i++) {
-          const sx = d.x + 14 + i * 54;
-          rr(ctx, sx, d.y + 10, 42, 52, 8); ctx.fill();
-          ctx.fillStyle = P.gold;
-          ctx.fillRect(sx + 6, d.y + 10, 30, 4);
-          ctx.fillStyle = P.velvet;
-        }
-      } else if (d.kind === 'rail') {
-        ctx.fillStyle = '#241a12';
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-        ctx.fillStyle = P.gold;
-        ctx.fillRect(d.x + d.w / 2 - 2, d.y, 4, d.h);
-        const cols = ['#7a1530', '#1d4d6b', '#d9a441', '#4d1a5c'];
-        for (let i = 0; i < 5; i++) {
-          ctx.fillStyle = cols[i % 4];
-          ctx.fillRect(d.x - 16, d.y + 14 + i * 42, d.w + 32, 30);
-        }
-      } else if (d.kind === 'crate') {
-        ctx.fillStyle = '#4a2f1a';
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-        ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
-        ctx.strokeRect(d.x + 4, d.y + 4, d.w - 8, d.h - 8);
-        ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + d.w, d.y + d.h); ctx.stroke();
-      } else if (d.kind === 'piano') {
-        ctx.fillStyle = '#120c08';
-        rr(ctx, d.x, d.y, d.w, d.h, 8); ctx.fill();
-        ctx.fillStyle = '#f5ead2';
-        for (let i = 0; i < 10; i++) ctx.fillRect(d.x + 8 + i * 10, d.y + d.h - 16, 8, 12);
-      } else if (d.kind === 'curtain') {
-        ctx.fillStyle = P.velvet;
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-        ctx.fillStyle = 'rgba(0,0,0,0.35)';
-        for (let i = 0; i < d.w / 14; i++) ctx.fillRect(d.x + i * 14, d.y, 6, d.h);
-        ctx.fillStyle = P.gold;
-        ctx.fillRect(d.x, d.y + d.h - 10, d.w, 6);
-      } else if (d.kind === 'pedestal') {
-        ctx.fillStyle = '#e8ddc0';
-        rr(ctx, d.x, d.y, d.w, d.h, 6); ctx.fill();
-        ctx.fillStyle = P.gold;
-        ctx.fillRect(d.x + 6, d.y + 6, d.w - 12, 5);
-      } else if (d.kind === 'footlights') {
-        for (let i = 0; i < 11; i++) {
-          const fx = d.x + 20 + i * 78;
-          const glow = 0.5 + 0.5 * Math.sin(time * 2 + i);
-          ctx.fillStyle = 'rgba(242,193,78,' + (0.35 + 0.4 * glow) + ')';
-          ctx.beginPath(); ctx.arc(fx, d.y + 9, 9, 0, Math.PI * 2); ctx.fill();
-        }
-      } else if (d.kind === 'chandelier') {
-        ctx.strokeStyle = P.gold; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(d.x + 30, d.y + 30, 26, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = 'rgba(242,193,78,0.85)';
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          ctx.beginPath(); ctx.arc(d.x + 30 + Math.cos(a) * 26, d.y + 30 + Math.sin(a) * 26, 4, 0, Math.PI * 2); ctx.fill();
-        }
-      } else if (d.kind === 'boxoffice') {
-        ctx.fillStyle = '#2a1a12';
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-        ctx.fillStyle = P.gold;
-        ctx.font = 'bold 13px Georgia, serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('BOX OFFICE', d.x + d.w / 2, d.y + 25);
-      } else if (d.kind === 'trapdoor') {
-        ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
-        ctx.strokeRect(d.x, d.y, d.w, d.h);
-        ctx.fillStyle = 'rgba(217,164,65,0.18)';
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-      } else if (d.kind === 'rope') {
-        ctx.strokeStyle = P.velvet; ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.moveTo(d.x, d.y + 13); ctx.quadraticCurveTo(d.x + d.w / 2, d.y + 30, d.x + d.w, d.y + 13); ctx.stroke();
-        ctx.fillStyle = P.gold;
-        ctx.beginPath(); ctx.arc(d.x, d.y + 13, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(d.x + d.w, d.y + 13, 5, 0, Math.PI * 2); ctx.fill();
-      }
-    }
+  // Roses in flight.
+  for (const r of game.tools.roses) {
+    ctx.fillStyle = '#c2253d';
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff7a8a';
+    ctx.beginPath();
+    ctx.arc(r.x - 2, r.y - 2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  function drawLoot(ctx, loot, time) {
-    for (const item of loot) {
-      if (item.taken) continue;
-      const pulse = 0.7 + 0.3 * Math.sin(time * 4 + item.x);
-      ctx.save();
-      ctx.translate(item.x, item.y);
-      if (item.kind === 'diamond') {
-        ctx.fillStyle = 'rgba(180,230,255,' + (0.25 * pulse) + ')';
-        ctx.beginPath(); ctx.arc(0, 0, 34 * pulse, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#bfe9ff';
-        ctx.beginPath();
-        ctx.moveTo(0, -20); ctx.lineTo(16, 0); ctx.lineTo(0, 20); ctx.lineTo(-16, 0);
-        ctx.closePath(); ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(10, -6); ctx.lineTo(-10, -6); ctx.closePath(); ctx.fill();
-      } else {
-        ctx.fillStyle = 'rgba(255,217,77,' + (0.22 * pulse) + ')';
-        ctx.beginPath(); ctx.arc(0, 0, 20 * pulse, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = item.kind === 'cashbox' ? '#8a5a22' : P.loot;
-        if (item.kind === 'cashbox') { ctx.fillRect(-13, -9, 26, 18); ctx.fillStyle = P.gold; ctx.fillRect(-13, -3, 26, 4); }
-        else { ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.fill(); }
-      }
-      ctx.restore();
-    }
+  // Noise rings from footsteps.
+  for (const ring of game.player.rings) {
+    ctx.strokeStyle = `rgba(255, 220, 140, ${Math.max(0, ring.life * 0.7)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ring.x, ring.y, ring.r, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
-  function drawGuard(ctx, g, time) {
-    const hot = g.suspicion > 50;
-    drawCone(ctx, g.x, g.y, g.angle, CFG.visionRange, CFG.visionHalfAngle, hot ? CFG.palette.coneHot : CFG.palette.cone);
-    ctx.fillStyle = g.kind === 'manager' ? '#1d1d26' : '#23232e';
-    ctx.beginPath(); ctx.arc(g.x, g.y, 13, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = P.gold;
-    ctx.beginPath(); ctx.arc(g.x + Math.cos(g.angle) * 8, g.y + Math.sin(g.angle) * 8, 4, 0, Math.PI * 2); ctx.fill();
-    // Suspicion ring over the guard's head.
-    if (g.suspicion > 4) {
-      ctx.strokeStyle = hot ? P.danger : P.gold;
-      ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(g.x, g.y - 24, 9, -Math.PI / 2, -Math.PI / 2 + (g.suspicion / 100) * Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = hot ? P.danger : P.ink;
-      ctx.font = 'bold 12px Georgia, serif'; ctx.textAlign = 'center';
-      ctx.fillText(g.state === 'investigate' ? '?' : '!', g.x, g.y - 34);
-    }
-    ctx.fillStyle = P.ink;
-    ctx.font = '10px Georgia, serif'; ctx.textAlign = 'center';
-    ctx.fillText(g.kind === 'usher' ? 'USHER' : g.kind === 'manager' ? 'STAGE MGR' : 'STAGEHAND', g.x, g.y + 26);
+  drawPlayer(ctx, game.player, t, game.player.hidden);
+
+  // Suspicion ring over the thief when being seen.
+  if (game.suspicion > 5 && game.state === 'playing') {
+    ctx.strokeStyle = game.suspicion > 80 ? '#ff3b30' : '#ffb347';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(game.player.x, game.player.y, 24 + Math.sin(t * 6) * 2,
+      -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * game.suspicion) / 100);
+    ctx.stroke();
   }
 
-  function drawWatcher(ctx, w, range, halfAngle, fill, label) {
-    drawCone(ctx, w.x, w.y, w.angle, range, halfAngle, fill);
-    ctx.fillStyle = '#1a1a22';
-    ctx.fillRect(w.x - 8, w.y - 8, 16, 16);
-    ctx.fillStyle = '#78c8ff';
-    ctx.beginPath(); ctx.arc(w.x + Math.cos(w.angle) * 8, w.y + Math.sin(w.angle) * 8, 3.5, 0, Math.PI * 2); ctx.fill();
-    if (w.suspicion > 4) {
-      ctx.strokeStyle = P.danger; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(w.x, w.y - 16, 7, -Math.PI / 2, -Math.PI / 2 + (w.suspicion / 100) * Math.PI * 2); ctx.stroke();
-    }
-    ctx.fillStyle = P.muted;
-    ctx.font = '10px Georgia, serif'; ctx.textAlign = 'center';
-    ctx.fillText(label, w.x, w.y + 24);
-  }
-
-  function drawPlayer(ctx, p, time) {
-    for (const ring of p.noiseRings) {
-      ctx.strokeStyle = 'rgba(245,234,210,' + Math.max(0, ring.alpha) + ')';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(ring.x, ring.y, ring.r, 0, Math.PI * 2); ctx.stroke();
-    }
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    if (p.hidden) { ctx.globalAlpha = 0.55; }
-    ctx.fillStyle = '#0e0e14';
-    ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.stroke();
-    // Mask + hat brim.
-    ctx.fillStyle = '#f5ead2';
-    ctx.beginPath(); ctx.arc(Math.cos(p.facing) * 5, Math.sin(p.facing) * 5, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#0e0e14';
-    ctx.fillRect(-8, -4, 16, 4);
-    ctx.restore();
-    ctx.fillStyle = P.ink;
-    ctx.font = '10px Georgia, serif'; ctx.textAlign = 'center';
-    ctx.fillText(p.sneaking ? 'SNEAKING' : 'THIEF', p.x, p.y + 26);
-  }
-
-  function drawExit(ctx, exit, open) {
-    ctx.fillStyle = open ? 'rgba(125,220,138,0.85)' : 'rgba(217,164,65,0.5)';
-    ctx.fillRect(exit.x, exit.y, exit.w, exit.h);
-    ctx.strokeStyle = P.gold; ctx.lineWidth = 3;
-    ctx.strokeRect(exit.x, exit.y, exit.w, exit.h);
-    // Label sits horizontally in the room beside the door, never clipped.
-    ctx.textAlign = 'right';
-    ctx.fillStyle = open ? P.safe : P.gold;
+  // Stage bell masking indicator.
+  if (game.bellTimer > 0) {
+    ctx.fillStyle = 'rgba(255,233,168,0.9)';
     ctx.font = 'bold 13px Georgia, serif';
-    ctx.fillText(exit.label, exit.x - 10, exit.y + exit.h / 2 - 2);
-    ctx.font = '11px Georgia, serif';
-    ctx.fillText(open ? 'OPEN' : 'LOCKED', exit.x - 10, exit.y + exit.h / 2 + 14);
+    ctx.textAlign = 'center';
+    ctx.fillText(`♪ THE STAGE BELL MASKS YOUR NOISE (${Math.ceil(game.bellTimer)}s) ♪`, W / 2, HUD_H + 34);
     ctx.textAlign = 'left';
   }
 
-  function drawHud(ctx, game) {
-    ctx.fillStyle = '#120a18';
-    ctx.fillRect(0, 0, 1280, 56);
-    ctx.fillStyle = P.gold;
-    ctx.fillRect(0, 54, 1280, 2);
-    ctx.fillStyle = P.goldBright;
-    ctx.font = 'bold 20px Georgia, serif'; ctx.textAlign = 'left';
-    ctx.fillText('CURTAIN CALL', 16, 24);
-    ctx.fillStyle = P.ink;
-    ctx.font = '13px Georgia, serif';
-    ctx.fillText(game.act.name, 16, 44);
-    // Alarm meter.
-    ctx.fillStyle = P.muted;
-    ctx.font = 'bold 12px Georgia, serif';
-    ctx.fillText('ALARM', 330, 22);
-    ctx.fillStyle = '#2a1214';
-    rr(ctx, 390, 10, 260, 18, 9); ctx.fill();
-    const aw = Math.max(0, Math.min(1, game.alarm / 100)) * 260;
-    ctx.fillStyle = game.alarm > 70 ? P.danger : game.alarm > 35 ? '#e08a2e' : P.safe;
-    if (aw > 2) { rr(ctx, 390, 10, aw, 18, 9); ctx.fill(); }
-    ctx.fillStyle = P.ink;
-    ctx.font = 'bold 12px Georgia, serif';
-    ctx.fillText(Math.round(game.alarm) + '', 660, 24);
-    // Loot + quota, right-aligned so it never collides with the alarm.
-    ctx.fillStyle = P.loot;
-    ctx.font = 'bold 15px Georgia, serif';
-    ctx.textAlign = 'right';
-    ctx.fillText('◆ LOOT ' + game.lootCount + ' / ' + game.act.quota + (game.hasDiamond ? '  ★ STAR STOLEN' : ''), 1264, 24);
-    // Tools under the alarm; controls on the same row, right-aligned.
-    ctx.fillStyle = P.ink;
-    ctx.font = '13px Georgia, serif';
+  drawHUD(ctx, game);
+  drawHint(ctx, game);
+
+  // SPOTTED! warning.
+  if (game.state === 'spotted') {
+    const flash = Math.floor(t * 6) % 2 === 0;
+    ctx.fillStyle = flash ? 'rgba(255,40,40,0.22)' : 'rgba(255,40,40,0.10)';
+    ctx.fillRect(0, HUD_H, W, H - HUD_H);
+    ctx.fillStyle = '#ff3b30';
+    ctx.font = 'bold 44px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SPOTTED!', W / 2, 200);
+    ctx.fillStyle = '#ffe9a8';
+    ctx.font = 'bold 18px Georgia, serif';
+    ctx.fillText('Break line of sight — NOW!', W / 2, 234);
     ctx.textAlign = 'left';
-    ctx.fillText('1 Rose ×' + game.tools.rose + '    2 Smoke ×' + game.tools.smoke + '    3 Lights ×' + game.tools.footlights, 330, 44);
-    ctx.fillStyle = P.muted;
-    ctx.font = '12px Georgia, serif'; ctx.textAlign = 'right';
-    ctx.fillText('WASD move · Shift sneak · E grab · P pause · R restart · M mute', 1264, 44);
-    ctx.textAlign = 'left';
-    // Act hint as a small pill along the bottom edge, clear of the playfield.
-    ctx.fillStyle = 'rgba(10,6,14,0.78)';
-    ctx.fillRect(440, 697, 400, 17);
-    ctx.fillStyle = P.muted;
-    ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
-    ctx.fillText(game.act.hint, 640, 709);
-    ctx.textAlign = 'left';
-    // SPOTTED warning banner.
-    if (game.spottedTimer > 0) {
-      ctx.fillStyle = 'rgba(255,84,64,0.92)';
-      ctx.fillRect(440, 64, 400, 40);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 22px Georgia, serif'; ctx.textAlign = 'center';
-      ctx.fillText('SPOTTED! BREAK LINE OF SIGHT!', 640, 92);
-      ctx.textAlign = 'left';
-    }
   }
 
-  function drawOverlay(ctx, game) {
-    if (game.state === 'paused') {
-      ctx.fillStyle = 'rgba(10,6,14,0.72)';
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = P.ink; ctx.textAlign = 'center';
-      ctx.font = 'bold 44px Georgia, serif';
-      ctx.fillText('INTERMISSION', 640, 340);
-      ctx.font = '18px Georgia, serif';
-      ctx.fillText('P to resume · R to restart the act', 640, 380);
-      ctx.textAlign = 'left';
-    } else if (game.state === 'caught') {
-      ctx.fillStyle = 'rgba(60,8,12,0.78)';
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center';
-      ctx.font = 'bold 44px Georgia, serif';
-      ctx.fillText('CAUGHT IN THE SPOTLIGHT!', 640, 330);
-      ctx.font = '18px Georgia, serif';
-      ctx.fillText('The house manager has you. Press R to try the act again.', 640, 372);
-      ctx.textAlign = 'left';
-    } else if (game.state === 'won') {
-      ctx.fillStyle = 'rgba(10,16,10,0.78)';
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = P.goldBright; ctx.textAlign = 'center';
-      ctx.font = 'bold 44px Georgia, serif';
-      ctx.fillText('CURTAIN CALL — YOU DID IT!', 640, 320);
-      ctx.fillStyle = P.ink;
-      ctx.font = '20px Georgia, serif';
-      ctx.fillText('The Star of the Stage is yours. The crowd roars as you slip out the stage door.', 640, 362);
-      ctx.font = '18px Georgia, serif';
-      ctx.fillText('Loot ' + game.lootCount + ' · Final alarm ' + Math.round(game.alarm) + ' · Press R to play again', 640, 398);
-      ctx.textAlign = 'left';
-    } else if (game.state === 'actclear') {
-      ctx.fillStyle = 'rgba(10,6,14,0.55)';
-      ctx.fillRect(0, 56, 1280, 664);
-      ctx.fillStyle = P.goldBright; ctx.textAlign = 'center';
-      ctx.font = 'bold 40px Georgia, serif';
-      ctx.fillText(game.actClearText, 640, 350);
-      ctx.textAlign = 'left';
-    }
+  if (game.state === 'paused') {
+    ctx.fillStyle = 'rgba(8,4,16,0.75)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = PAL.cream;
+    ctx.font = 'bold 40px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('INTERMISSION', W / 2, H / 2 - 10);
+    ctx.font = '18px Georgia, serif';
+    ctx.fillText('Paused — press P to return to the heist', W / 2, H / 2 + 26);
+    ctx.textAlign = 'left';
   }
 
-  function render(ctx, game, time) {
-    const act = game.act;
-    drawFloor(ctx, act, time);
-    drawDecor(ctx, act, time);
-    // Shadow zones from cut footlights.
-    for (const z of game.tools.shadowZones) {
-      ctx.fillStyle = 'rgba(10,6,20,0.55)';
-      ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(217,164,65,0.6)';
-      ctx.setLineDash([6, 6]);
-      ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    // Followspot cone first (it is the room's light), then cameras, then guards.
-    if (game.followspot) {
-      drawCone(ctx, game.followspot.x, game.followspot.y, game.followspot.angle, CFG.followspotRange, CFG.followspotHalfAngle, CFG.palette.spotCone);
-      ctx.fillStyle = '#3a2c12';
-      ctx.fillRect(game.followspot.x - 16, game.followspot.y - 10, 32, 20);
-      ctx.fillStyle = '#fff4c8';
-      ctx.beginPath(); ctx.arc(game.followspot.x, game.followspot.y + 12, 6, 0, Math.PI * 2); ctx.fill();
-    }
-    for (const cam of game.cameras) drawWatcher(ctx, cam, CFG.cameraRange, CFG.cameraHalfAngle, CFG.palette.cameraCone, 'CAMERA');
-    for (const g of game.guards) drawGuard(ctx, g, time);
-    drawLoot(ctx, game.loot, time);
-    // Roses in flight / landed.
-    for (const r of game.tools.roses) {
-      ctx.fillStyle = '#c22a4d';
-      ctx.beginPath(); ctx.arc(r.x, r.y, 7, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = P.gold;
-      ctx.font = 'bold 11px Georgia, serif'; ctx.textAlign = 'center';
-      ctx.fillText('ROSE — COME LOOK', r.x, r.y - 14);
-      ctx.textAlign = 'left';
-    }
-    // Smoke cloud.
-    if (game.tools.smokeTimer > 0) {
-      ctx.fillStyle = 'rgba(220,220,230,0.35)';
-      ctx.beginPath(); ctx.arc(game.tools.smokeX, game.tools.smokeY, 70, 0, Math.PI * 2); ctx.fill();
-    }
-    drawExit(ctx, act.exit, game.lootCount >= act.quota);
-    drawPlayer(ctx, game.player, time);
-    // Vignette over the playfield only: depth at the edges, HUD untouched.
-    const vg = ctx.createRadialGradient(640, 388, 260, 640, 388, 780);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.30)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 56, 1280, 664);
-    drawHud(ctx, game);
-    drawOverlay(ctx, game);
+  if (game.state === 'caught') {
+    ctx.fillStyle = 'rgba(20,2,6,0.82)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff5a4d';
+    ctx.font = 'bold 44px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('CAUGHT!', W / 2, H / 2 - 20);
+    ctx.fillStyle = PAL.cream;
+    ctx.font = '18px Georgia, serif';
+    ctx.fillText('The ushers have you. The curtain falls on this thief.', W / 2, H / 2 + 16);
+    ctx.fillText('Press R to try the heist again', W / 2, H / 2 + 48);
+    ctx.textAlign = 'left';
   }
 
-  return { render, drawCone };
-})();
+  if (game.state === 'won') {
+    ctx.fillStyle = 'rgba(10,6,16,0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = PAL.gold;
+    ctx.font = 'bold 44px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('CURTAIN CALL!', W / 2, H / 2 - 40);
+    ctx.fillStyle = PAL.cream;
+    ctx.font = '20px Georgia, serif';
+    ctx.fillText('The Star of the Stage is yours — and the house erupts.', W / 2, H / 2);
+    ctx.font = '17px Georgia, serif';
+    ctx.fillText(`Loot: ${game.lootCount} pieces · Alarm peaked at ${Math.round(game.alarmPeak)}% · Press R to steal again`, W / 2, H / 2 + 34);
+    ctx.textAlign = 'left';
+  }
+}

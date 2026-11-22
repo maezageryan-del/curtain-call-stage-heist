@@ -1,28 +1,18 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CURTAIN CALL — steal the Star of the Stage</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #0d0710; height: 100%; }
-  body { display: flex; align-items: center; justify-content: center; }
-  canvas { width: min(100vw, 177.78vh); height: auto; display: block; background: #120a18; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0610; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>
 <body>
-<canvas id="stage" width="1280" height="720"></canvas>
-<script src="src/config.js"></script>
-<script src="src/input.js"></script>
-<script src="src/audio.js"></script>
-<script src="src/levels.js"></script>
-<script src="src/guards.js"></script>
-<script src="src/cameras.js"></script>
-<script src="src/player.js"></script>
-<script src="src/tools.js"></script>
-<script src="src/render.js"></script>
-<script src="src/game.js"></script>
-<script src="src/shots.js"></script>
-<script src="src/main.js"></script>
+<canvas id="game" aria-label="CURTAIN CALL: a top-down theatre heist. Sneak past the ushers, steal the Star of the Stage diamond, escape through the stage door."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

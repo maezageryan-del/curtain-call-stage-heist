@@ -1,62 +1,116 @@
-// CURTAIN CALL — all sound is synthesised with WebAudio; no audio files.
-window.CURTAIN_AUDIO = (function () {
+// Synthesised sound for CURTAIN CALL — WebAudio only, no audio files, no
+// network. One job: every sound the theatre makes, built from oscillators.
+
+export function createAudio() {
   let ctx = null;
-  let master = null;
   let muted = false;
-  let bellTimer = 0;
+  let master = null;
 
   function ensure() {
-    try {
-      if (!ctx) {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return null;
-        ctx = new AC();
-        master = ctx.createGain();
-        master.gain.value = 0.16;
-        master.connect(ctx.destination);
-      }
+    if (ctx) {
       if (ctx.state === 'suspended') ctx.resume();
       return ctx;
-    } catch (err) { return null; }
+    }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = 0.35;
+      master.connect(ctx.destination);
+    } catch (e) {
+      ctx = null;
+    }
+    return ctx;
   }
 
+  // A short tone with an exponential decay envelope.
   function tone(freq, dur, type, vol, slideTo) {
     if (muted) return;
     const c = ensure();
     if (!c) return;
-    try {
-      const o = c.createOscillator();
-      const g = c.createGain();
-      o.type = type || 'sine';
-      o.frequency.setValueAtTime(freq, c.currentTime);
-      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, c.currentTime + dur);
-      g.gain.setValueAtTime(vol || 0.5, c.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
-      o.connect(g); g.connect(master);
-      o.start(); o.stop(c.currentTime + dur);
-    } catch (err) { /* sound is optional */ }
+    const t0 = c.currentTime;
+    const osc = c.createOscillator();
+    const g = c.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t0 + dur);
+    g.gain.setValueAtTime(vol || 0.2, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(g);
+    g.connect(master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
   }
 
-  function footstep(sneak) { tone(sneak ? 140 : 190, 0.07, 'triangle', sneak ? 0.10 : 0.22, 90); }
-  function pickup() { tone(660, 0.12, 'sine', 0.5, 990); tone(990, 0.18, 'sine', 0.35, 1320); }
-  function roseToss() { tone(520, 0.16, 'sine', 0.4, 760); }
-  function smokePuff() { tone(300, 0.35, 'sawtooth', 0.12, 90); }
-  function footlightCut() { tone(220, 0.3, 'square', 0.2, 55); }
-  function suspicionSting() { tone(196, 0.4, 'sawtooth', 0.3, 392); }
-  function alarmBlare() { tone(440, 0.5, 'square', 0.25, 440); tone(349, 0.5, 'square', 0.25, 349); }
-  function caughtSting() { tone(110, 0.9, 'sawtooth', 0.4, 55); }
-  function actClear() { tone(523, 0.15, 'sine', 0.4); tone(659, 0.15, 'sine', 0.4); tone(784, 0.3, 'sine', 0.4); }
-  function applause() {
+  // Filtered noise burst (footsteps, smoke, applause wash).
+  function noise(dur, vol, filterFreq) {
     if (muted) return;
-    for (let i = 0; i < 14; i++) setTimeout(() => tone(900 + Math.random() * 900, 0.05, 'triangle', 0.12), i * 90);
-    tone(523, 0.4, 'sine', 0.4); tone(784, 0.5, 'sine', 0.4);
+    const c = ensure();
+    if (!c) return;
+    const t0 = c.currentTime;
+    const len = Math.max(1, Math.floor(c.sampleRate * dur));
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const filt = c.createBiquadFilter();
+    filt.type = 'lowpass';
+    filt.frequency.value = filterFreq || 800;
+    const g = c.createGain();
+    g.gain.setValueAtTime(vol || 0.15, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(master);
+    src.start(t0);
   }
-  function stageBell(dt) {
-    bellTimer -= dt;
-    if (bellTimer <= 0) { bellTimer = 9; tone(1046, 0.7, 'sine', 0.18, 1046); tone(1568, 0.5, 'sine', 0.08); }
-  }
-  function toggleMute() { muted = !muted; return muted; }
-  function isMuted() { return muted; }
 
-  return { footstep, pickup, roseToss, smokePuff, footlightCut, suspicionSting, alarmBlare, caughtSting, actClear, applause, stageBell, toggleMute, isMuted };
-})();
+  return {
+    get muted() { return muted; },
+    unlock() { ensure(); },
+    toggleMute() {
+      muted = !muted;
+      if (master) master.gain.value = muted ? 0 : 0.35;
+      return muted;
+    },
+    step(sneak) {
+      // Wooden boards: a soft knock; sneaking is a near-silent tap.
+      if (sneak) tone(140, 0.05, 'triangle', 0.04);
+      else { noise(0.07, 0.10, 500); tone(95, 0.06, 'sine', 0.08, 70); }
+    },
+    rose() { tone(660, 0.12, 'sine', 0.12, 990); noise(0.08, 0.05, 2000); },
+    pickup() { tone(880, 0.10, 'sine', 0.15); tone(1318, 0.16, 'sine', 0.12); },
+    diamond() {
+      tone(1046, 0.25, 'sine', 0.16);
+      tone(1568, 0.35, 'sine', 0.12);
+      tone(2093, 0.5, 'sine', 0.08);
+    },
+    sting() {
+      // Suspicion sting: a dissonant brass-ish bite.
+      tone(220, 0.35, 'sawtooth', 0.10, 233);
+      tone(233, 0.35, 'sawtooth', 0.10, 247);
+    },
+    alarm() {
+      tone(620, 0.22, 'square', 0.09);
+      setTimeout(() => tone(470, 0.22, 'square', 0.09), 240);
+    },
+    smoke() { noise(0.5, 0.12, 1200); },
+    lights() { tone(180, 0.3, 'sawtooth', 0.10, 60); noise(0.2, 0.08, 300); },
+    bell() { tone(1174, 0.9, 'sine', 0.10); tone(1760, 0.7, 'sine', 0.05); },
+    door() { tone(320, 0.4, 'triangle', 0.12, 240); noise(0.25, 0.08, 400); },
+    applause() {
+      // The house erupts: a wash of noise, then a warm chord.
+      noise(1.6, 0.16, 2500);
+      setTimeout(() => noise(1.2, 0.10, 2500), 500);
+      tone(523, 1.2, 'triangle', 0.07);
+      tone(659, 1.2, 'triangle', 0.07);
+      tone(784, 1.2, 'triangle', 0.07);
+    },
+    caught() {
+      tone(110, 0.6, 'sawtooth', 0.14, 55);
+      tone(165, 0.5, 'sawtooth', 0.10, 82);
+    },
+  };
+}

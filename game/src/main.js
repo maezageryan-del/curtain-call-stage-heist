@@ -1,40 +1,68 @@
-// CURTAIN CALL — boot: canvas, game loop, first screen is gameplay.
-(function () {
-  const CFG = window.CURTAIN_CONFIG;
-  const canvas = document.getElementById('stage');
-  const ctx = canvas.getContext('2d');
-  const game = window.CURTAIN_GAME.makeGame();
-  window.CURTAIN_GAME_INSTANCE = game;
+// Boot + main loop for CURTAIN CALL. One job: start the game, run the
+// frame loop, and expose the hooks headless checks use.
 
-  window.CURTAIN_INPUT.attach(canvas);
+import { W, H } from './config.js';
+import { createInput } from './input.js';
+import { createAudio } from './audio.js';
+import { Game } from './game.js';
+import { render } from './render.js';
+import { applyShot } from './shots.js';
 
-  // Deterministic screenshot staging: ?shot=cover|auditorium|nearmiss|getaway
-  const params = new URLSearchParams(window.location.search);
-  const shot = params.get('shot');
-  if (shot) window.CURTAIN_SHOTS.applyShot(game, shot);
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
 
-  function exposeState() {
-    window.__gameState = window.CURTAIN_GAME.gameState(game);
+function fitCanvas() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+const input = createInput(canvas);
+const audio = createAudio();
+const game = new Game(input, audio);
+
+// Headless hooks: the live game object and its loader, for verification.
+window.CURTAIN_GAME_INSTANCE = game;
+window.CURTAIN_GAME = {
+  loadAct(g, act) { g.loadAct(act); },
+  restart(g) { g.restart(); },
+};
+
+// Screenshot staging: ?shot=cover|auditorium|nearmiss|getaway
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot) {
+  applyShot(game, shot);
+}
+
+function syncState() {
+  window.__gameState = game.snapshot();
+  if (statusEl) {
+    const s = window.__gameState;
+    statusEl.textContent = `${s.actName}: ${s.state}, loot ${s.loot}/${s.lootQuota}, alarm ${s.alarm}%`;
   }
+}
 
-  let last = performance.now();
-  function frame(now) {
-    let dt = (now - last) / 1000;
-    last = now;
-    if (dt > 0.05) dt = 0.05;
-    if (dt < 0) dt = 0;
-    window.CURTAIN_GAME.update(game, dt);
-    // Keep the followspot and cameras sweeping even in a frozen shot frame.
-    if (game.shotFrozen) {
-      game.time += dt;
-      if (game.followspot) game.followspot.angle = window.CURTAIN_CAMERAS.sweepAngle(game.followspot, game.time);
-      for (const cam of game.cameras) cam.angle = window.CURTAIN_CAMERAS.sweepAngle(cam, game.time);
-    }
-    window.CURTAIN_RENDER.render(ctx, game, game.time);
-    exposeState();
-    requestAnimationFrame(frame);
-  }
-
-  exposeState();
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now;
+  // Resume from pause lives here so P works even while paused (the game
+  // update returns early in the paused state).
+  if (game.state === 'paused' && input.tapped('KeyP')) game.resume();
+  if (game.state === 'paused' && input.tapped('KeyR')) game.restart();
+  if ((game.state === 'caught' || game.state === 'won') && input.tapped('KeyR')) game.restart();
+  audio.unlock();
+  game.update(dt);
+  render(ctx, game, now / 1000);
+  syncState();
+  input.endFrame();
   requestAnimationFrame(frame);
-})();
+}
+
+syncState();
+requestAnimationFrame(frame);
